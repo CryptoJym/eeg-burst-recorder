@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EEG Session Recorder - Interactive Prototype</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 12px 12px 0 0;
+            border-bottom: 2px solid #3a3a3a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-title {
+            font-size: 24px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-bar {
+            background: #2a2a2a;
+            padding: 15px 20px;
+            border-bottom: 2px solid #3a3a3a;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        .status-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .status-label {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-value {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .live-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #00C851;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .recording-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #FF4444;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        .main-content {
+            background: #2a2a2a;
+            padding: 30px;
+        }
+
+        .session-setup {
+            background: #333;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #ccc;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #33B5E5;
+        }
+
+        .tag-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .tag {
+            background: #444;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .tag:hover {
+            background: #555;
+        }
+
+        .tag-remove {
+            color: #888;
+            cursor: pointer;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-item input {
+            width: 18px;
+            height: 18px;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #00C851;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #00A440;
+        }
+
+        .btn-danger {
+            background: #FF4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #CC0000;
+        }
+
+        .btn-secondary {
+            background: #444;
+            color: #e0e0e0;
+        }
+
+        .btn-secondary:hover {
+            background: #555;
+        }
+
+        .live-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .metric-panel {
+            background: #333;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .band-bar {
+            margin-bottom: 15px;
+        }
+
+        .band-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+
+        .band-name {
+            color: #ccc;
+        }
+
+        .band-value {
+            font-weight: 600;
+        }
+
+        .band-progress {
+            height: 20px;
+            background: #2a2a2a;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .band-fill {
+            height: 100%;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            font-size: 11px;
+            color: white;
+        }
+
+        .band-delta { background: #9933FF; }
+        .band-theta { background: #00C851; }
+        .band-alpha { background: #33B5E5; }
+        .band-beta { background: #FFBB33; }
+        .band-gamma { background: #FF4444; }
+
+        .burst-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .burst-item {
+            background: #2a2a2a;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .burst-time {
+            color: #888;
+            font-size: 11px;
+        }
+
+        .burst-channels {
+            margin-top: 4px;
+            color: #ccc;
+        }
+
+        .control-panel {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 30px;
+            padding: 20px;
+            background: #333;
+            border-radius: 8px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .settings-icon {
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .settings-icon:hover {
+            background: #3a3a3a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-title">
+                🎧 EEG Session Recorder
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <span class="settings-icon" onclick="alert('Settings panel would open here')">⚙️</span>
+                <span class="settings-icon" onclick="alert('Help documentation would open here')">❓</span>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-label">Stream</span>
+                <span class="status-value">
+                    <span class="live-indicator"></span>
+                    MW75 Neuro (500 Hz, 14ch)
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Recording</span>
+                <span class="status-value" id="timer">
+                    --:--:--
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Bursts</span>
+                <span class="status-value" id="burstCounter">0</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Storage</span>
+                <span class="status-value" id="storage">0.0 MB</span>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Session Setup (visible before recording) -->
+            <div id="setupPanel" class="session-setup">
+                <h2 style="margin-bottom: 20px;">Session Setup</h2>
+
+                <div class="form-group">
+                    <label class="form-label">Session Name</label>
+                    <input type="text" class="form-input" id="sessionName"
+                           value="Meditation Session 2025-11-11" placeholder="Enter session name...">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Tags</label>
+                    <div class="tag-container" id="tagContainer">
+                        <span class="tag">meditation <span class="tag-remove" onclick="removeTag(this)">×</span></span>
+                        <span class="tag">theta-training <span class="tag-remove" onclick="removeTag(this)">×</span></span>
+                        <button class="btn btn-secondary" onclick="addTag()">+ Add Tag</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Notes</label>
+                    <textarea class="form-input" rows="3" id="sessionNotes"
+                              placeholder="Add any notes about this session...">Trying 20-min session with binaural beats</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Analysis Methods</label>
+                    <div class="checkbox-group">
+                        <label class="checkbox-item">
+                            <input type="checkbox" checked id="spectralCheck">
+                            <span>Spectral Analysis (Delta, Theta, Alpha, Beta, Gamma)</span>
+                        </label>
+                        <label class="checkbox-item">
+                            <input type="checkbox" checked id="burstCheck">
+                            <span>Burst Detection (Artifacts + Events)</span>
+                        </label>
+                        <label class="checkbox-item">
+                            <input type="checkbox" id="hrvCheck">
+                            <span>Heart Rate Variability (if available)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Duration</label>
+                    <div class="radio-group">
+                        <label class="checkbox-item">
+                            <input type="radio" name="duration" value="continuous">
+                            <span>Continuous</span>
+                        </label>
+                        <label class="checkbox-item">
+                            <input type="radio" name="duration" value="timed" checked>
+                            <span>Timed:</span>
+                        </label>
+                        <input type="number" class="form-input" value="20" min="1" max="240"
+                               style="width: 80px; display: inline-block; margin-left: 10px;"> minutes
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <button class="btn btn-secondary" onclick="alert('Advanced settings would open here')">
+                        Configure Advanced Settings...
+                    </button>
+                </div>
+            </div>
+
+            <!-- Live Monitoring (visible during recording) -->
+            <div id="monitoringPanel" class="hidden">
+                <div class="live-metrics">
+                    <!-- Spectral Bands Panel -->
+                    <div class="metric-panel">
+                        <div class="panel-title">🧠 Spectral Bands</div>
+
+                        <div class="band-bar">
+                            <div class="band-header">
+                                <span class="band-name">Delta (0.5-4 Hz)</span>
+                                <span class="band-value">68%</span>
+                            </div>
+                            <div class="band-progress">
+                                <div class="band-fill band-delta" style="width: 68%;">↗ Increasing</div>
+                            </div>
+                        </div>
+
+                        <div class="band-bar">
+                            <div class="band-header">
+                                <span class="band-name">Theta (4-8 Hz)</span>
+                                <span class="band-value">82%</span>
+                            </div>
+                            <div class="band-progress">
+                                <div class="band-fill band-theta" style="width: 82%;">↑ High</div>
+                            </div>
+                        </div>
+
+                        <div class="band-bar">
+                            <div class="band-header">
+                                <span class="band-name">Alpha (8-13 Hz)</span>
+                                <span class="band-value">35%</span>
+                            </div>
+                            <div class="band-progress">
+                                <div class="band-fill band-alpha" style="width: 35%;">↘ Decreasing</div>
+                            </div>
+                        </div>
+
+                        <div class="band-bar">
+                            <div class="band-header">
+                                <span class="band-name">Beta (13-30 Hz)</span>
+                                <span class="band-value">18%</span>
+                            </div>
+                            <div class="band-progress">
+                                <div class="band-fill band-beta" style="width: 18%;">→ Stable</div>
+                            </div>
+                        </div>
+
+                        <div class="band-bar">
+                            <div class="band-header">
+                                <span class="band-name">Gamma (30-100 Hz)</span>
+                                <span class="band-value">12%</span>
+                            </div>
+                            <div class="band-progress">
+                                <div class="band-fill band-gamma" style="width: 12%;">→ Stable</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Burst Activity Panel -->
+                    <div class="metric-panel">
+                        <div class="panel-title">⚡ Burst Activity <span style="font-size: 12px; color: #888; margin-left: auto;">Last: 00:00:45</span></div>
+
+                        <div style="margin-bottom: 15px;">
+                            <strong>Total Bursts: <span id="totalBursts">12</span></strong>
+                        </div>
+
+                        <div style="font-size: 13px; color: #888; margin-bottom: 10px;">Recent Events:</div>
+                        <div class="burst-list" id="burstList">
+                            <div class="burst-item">
+                                <div class="burst-time">00:15:17</div>
+                                <div class="burst-channels">Ch1, Ch6 - RMS: 1842 µV [Eye Blink]</div>
+                            </div>
+                            <div class="burst-item">
+                                <div class="burst-time">00:14:32</div>
+                                <div class="burst-channels">Ch1, Ch3, Ch6 - RMS: 2103 µV [Movement]</div>
+                            </div>
+                            <div class="burst-item">
+                                <div class="burst-time">00:13:48</div>
+                                <div class="burst-channels">Ch7, Ch8 - RMS: 987 µV [Jaw Clench]</div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 15px; font-size: 13px; color: #888;">
+                            Burst Rate: <strong>0.8/min</strong> (normal)
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Session Quality -->
+                <div class="metric-panel" style="margin-top: 20px;">
+                    <div class="panel-title">📊 Session Quality</div>
+
+                    <div class="band-bar">
+                        <div class="band-header">
+                            <span class="band-name">Signal Quality</span>
+                            <span class="band-value" style="color: #00C851;">Good</span>
+                        </div>
+                        <div class="band-progress">
+                            <div class="band-fill" style="width: 92%; background: #00C851;">92%</div>
+                        </div>
+                    </div>
+
+                    <div class="band-bar">
+                        <div class="band-header">
+                            <span class="band-name">Artifact Level</span>
+                            <span class="band-value" style="color: #00C851;">Low</span>
+                        </div>
+                        <div class="band-progress">
+                            <div class="band-fill" style="width: 25%; background: #33B5E5;">25%</div>
+                        </div>
+                    </div>
+
+                    <div class="band-bar">
+                        <div class="band-header">
+                            <span class="band-name">Data Integrity</span>
+                            <span class="band-value" style="color: #00C851;">Excellent</span>
+                        </div>
+                        <div class="band-progress">
+                            <div class="band-fill" style="width: 99%; background: #00C851;">99%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <button class="btn btn-primary" id="startBtn" onclick="startRecording()">
+                    ▶ Start Recording
+                </button>
+                <button class="btn btn-danger hidden" id="stopBtn" onclick="stopRecording()">
+                    ■ Stop Recording
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let recording = false;
+        let startTime = null;
+        let timerInterval = null;
+        let burstCount = 0;
+
+        function startRecording() {
+            recording = true;
+            startTime = Date.now();
+            burstCount = 0;
+
+            // UI changes
+            document.getElementById('setupPanel').classList.add('hidden');
+            document.getElementById('monitoringPanel').classList.remove('hidden');
+            document.getElementById('startBtn').classList.add('hidden');
+            document.getElementById('stopBtn').classList.remove('hidden');
+
+            // Add recording indicator to timer
+            const timerEl = document.getElementById('timer');
+            timerEl.innerHTML = '<span class="recording-indicator"></span> 00:00:00';
+
+            // Start timer
+            timerInterval = setInterval(updateTimer, 1000);
+
+            // Simulate burst detection
+            simulateBursts();
+
+            // Simulate spectral band changes
+            simulateSpectral();
+        }
+
+        function stopRecording() {
+            recording = false;
+            clearInterval(timerInterval);
+
+            // Show completion message
+            alert('Recording stopped!\n\nSession saved:\n• Duration: ' + document.getElementById('timer').textContent.replace(/[^0-9:]/g, '') + '\n• Bursts: ' + burstCount + '\n• Files: NPZ + JSON\n\nClick OK to view session review.');
+
+            // Reset UI
+            document.getElementById('setupPanel').classList.remove('hidden');
+            document.getElementById('monitoringPanel').classList.add('hidden');
+            document.getElementById('startBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('timer').textContent = '--:--:--';
+            document.getElementById('burstCounter').textContent = '0';
+            document.getElementById('storage').textContent = '0.0 MB';
+        }
+
+        function updateTimer() {
+            if (!recording) return;
+
+            const elapsed = Date.now() - startTime;
+            const seconds = Math.floor(elapsed / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+
+            const timeStr = String(hours).padStart(2, '0') + ':' +
+                          String(minutes % 60).padStart(2, '0') + ':' +
+                          String(seconds % 60).padStart(2, '0');
+
+            document.getElementById('timer').innerHTML = '<span class="recording-indicator"></span> ' + timeStr;
+
+            // Update storage estimate (70KB per burst + some overhead)
+            const storage = ((burstCount * 0.07) + (seconds * 0.001)).toFixed(1);
+            document.getElementById('storage').textContent = storage + ' MB';
+        }
+
+        function simulateBursts() {
+            if (!recording) return;
+
+            // Random burst every 5-15 seconds
+            const delay = Math.random() * 10000 + 5000;
+
+            setTimeout(() => {
+                if (recording) {
+                    burstCount++;
+                    document.getElementById('burstCounter').textContent = burstCount;
+                    document.getElementById('totalBursts').textContent = burstCount;
+
+                    // Add burst to list
+                    const elapsed = Date.now() - startTime;
+                    const seconds = Math.floor(elapsed / 1000);
+                    const minutes = Math.floor(seconds / 60);
+                    const timeStr = String(minutes).padStart(2, '0') + ':' +
+                                  String(seconds % 60).padStart(2, '0');
+
+                    const channels = ['Ch1', 'Ch6', 'Ch3', 'Ch7', 'Ch8'];
+                    const selectedChannels = channels.slice(0, Math.floor(Math.random() * 3) + 1).join(', ');
+                    const rms = Math.floor(Math.random() * 2000) + 500;
+                    const types = ['Eye Blink', 'Movement', 'Jaw Clench'];
+                    const type = types[Math.floor(Math.random() * types.length)];
+
+                    const burstHtml = `
+                        <div class="burst-item">
+                            <div class="burst-time">${timeStr}</div>
+                            <div class="burst-channels">${selectedChannels} - RMS: ${rms} µV [${type}]</div>
+                        </div>
+                    `;
+
+                    const burstList = document.getElementById('burstList');
+                    burstList.insertAdjacentHTML('afterbegin', burstHtml);
+
+                    // Keep only last 5 bursts visible
+                    while (burstList.children.length > 5) {
+                        burstList.removeChild(burstList.lastChild);
+                    }
+
+                    simulateBursts(); // Schedule next burst
+                }
+            }, delay);
+        }
+
+        function simulateSpectral() {
+            // This would normally get real data from the backend
+            // For demo, we'll just show static values
+        }
+
+        function addTag() {
+            const tagName = prompt('Enter tag name:');
+            if (tagName && tagName.trim()) {
+                const tagHtml = `<span class="tag">${tagName.trim()} <span class="tag-remove" onclick="removeTag(this)">×</span></span>`;
+                const container = document.getElementById('tagContainer');
+                const button = container.querySelector('button');
+                button.insertAdjacentHTML('beforebegin', tagHtml);
+            }
+        }
+
+        function removeTag(element) {
+            element.parentElement.remove();
+        }
+    </script>
+</body>
+</html>
