@@ -8,7 +8,7 @@ import numpy as np
 import time
 import logging
 from typing import Optional, Callable, Dict, List
-from pylsl import StreamInlet, resolve_stream
+from pylsl import StreamInlet, resolve_streams
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class AudioMonitor:
         logger.info(f"Searching for LSL Audio stream: {self.stream_name}")
 
         try:
-            streams = resolve_stream('type', 'Audio', timeout=timeout)
+            streams = resolve_streams('type', 'Audio', timeout=timeout)
 
             if not streams:
                 logger.warning(f"No Audio stream found after {timeout}s")
