@@ -1,12 +1,19 @@
 """
-EEG State Analyzer with ML
+EEG State Analyzer with ML and Symbiosis Tokenization
 
 Quick analysis of EEG data for band power extraction and state classification.
 Uses PSD for frequency bands and IsolationForest for anomaly detection.
+
+Symbiosis v1.2: Consciousness token computation with:
+- Token_t = H[S_t · PE_t · Φ_t · GA_t] (master equation)
+- SE-gated hierarchical prediction error
+- Integrated information proxy (Φ)
+- Global availability via gamma synchrony (GA)
 """
 
 import numpy as np
 from scipy.signal import welch
+from scipy.linalg import det
 from sklearn.ensemble import IsolationForest
 
 
@@ -122,3 +129,177 @@ def analyze_session(burst_list):
         'dominant_state': dominant_state,
         'state_distribution': {state: states.count(state) for state in set(states)}
     }
+
+
+# ===== SYMBIOSIS v1.2: Consciousness Token Computation =====
+
+def compute_symbiosis_token(eeg_window, s_t, session_prior, config, word_start_ms=None):
+    """
+    Compute consciousness token from EEG window and somatic state
+
+    Master Equation:
+        Token_t = H[S_t · PE_t · Φ_t · GA_t] * SE_gate
+
+    Where:
+        S_t  = Somatic state (heart-derived) [0,1]
+        PE_t = Prediction error (Bayesian surprise + hierarchical)
+        Φ_t  = Integrated information (consciousness proxy)
+        GA_t = Global availability (gamma synchrony)
+        H    = Bounding function (tanh)
+        SE_gate = Spectral exponent gate (filters low-awareness)
+
+    Args:
+        eeg_window: numpy array (n_samples, n_channels) - EEG data window
+        s_t: float - Somatic state from heart [0,1]
+        session_prior: numpy array - Prior EEG distribution for PE computation
+        config: dict - Configuration with equation thresholds
+        word_start_ms: float - Optional word timestamp for logging
+
+    Returns:
+        dict with token value, components, and state classification
+    """
+    fs = 256  # Neurable MW75 sample rate
+
+    # Handle 1D input
+    if eeg_window.ndim == 1:
+        eeg_window = eeg_window.reshape(-1, 1)
+
+    # === PE_t: Prediction Error with Hierarchical Extension ===
+    # Base PE: ||μ_post - μ_prior||^2 * Π (Gaussian approx)
+    mu_post = np.mean(eeg_window, axis=0)
+    mu_prior = np.mean(session_prior, axis=0) if session_prior.ndim == 2 else np.array([np.mean(session_prior)])
+    var_prior = np.var(session_prior)
+
+    pe_base = np.linalg.norm(mu_post - mu_prior) ** 2 * (1 / (var_prior + 1e-6))
+
+    # Hierarchical PE: ∑_l PE_l (sensory → abstract)
+    # l1: Delta/Theta (sensory), l2: Alpha/Beta (attention), l3: Gamma (integration)
+    hier_bands = {'l1': (0.5, 8), 'l2': (8, 30), 'l3': (30, 100)}
+    f, psd = welch(eeg_window.mean(axis=1), fs=fs, nperseg=min(128, len(eeg_window)))
+
+    hier_pe = 0
+    for level, (lo, hi) in hier_bands.items():
+        mask = (f >= lo) & (f <= hi)
+        if np.any(mask):
+            # Power as proxy for prediction error (deviation from baseline)
+            hier_pe += np.trapz(psd[mask], f[mask])
+
+    pe_t = pe_base + (hier_pe / 3.0)  # Normalize hierarchical component
+
+    # === Φ_t: Integrated Information Proxy ===
+    # Approximation: det(Cov) / std^2 (captures irreducibility)
+    try:
+        cov = np.cov(eeg_window.T)
+        cov_det = det(cov) if cov.shape[0] > 1 else cov.item()
+        phi_t = abs(cov_det) / (np.std(eeg_window)**2 + 1e-6)
+    except Exception as e:
+        print(f"Φ computation warning: {e}")
+        phi_t = 0.5  # Default neutral value
+
+    # === GA_t: Global Availability ===
+    # PLV (Phase-Locking Value) * γ_sync (gamma power ratio)
+
+    # Phase-locking across channels
+    if eeg_window.shape[1] > 1:
+        phase_diff = np.angle(np.fft.fft(eeg_window[:, 1:] - eeg_window[:, :-1], axis=0))
+        plv = float(np.abs(np.mean(np.exp(1j * phase_diff))))
+    else:
+        plv = 0.5  # Single channel default
+
+    # Gamma synchrony (normalized gamma power)
+    gamma_mask = (f >= 30) & (f <= 100)
+    if np.any(gamma_mask):
+        gamma_power = np.trapz(psd[gamma_mask], f[gamma_mask])
+        gamma_sync = gamma_power / (np.max(psd) + 1e-6)
+    else:
+        gamma_sync = 0.5
+
+    ga_t = plv * gamma_sync
+
+    # === SE Gate: Spectral Exponent (1/f slope) ===
+    # Gate = σ(SE - threshold) filters low-awareness states
+    log_f = np.log(f[1:])
+    log_psd = np.log(psd[1:] + 1e-10)
+
+    if len(log_f) > 2:
+        se_coeffs = np.polyfit(log_f, log_psd, 1)
+        se = -se_coeffs[0]  # Negative slope (1/f^α)
+        se_threshold = config.get('equations', {}).get('se_threshold', -1.5)
+        se_gate = 1 / (1 + np.exp(se - se_threshold))  # Sigmoid gate
+    else:
+        se_gate = 1.0  # No gating if insufficient data
+
+    # === Master Token_t = H[S_t · PE_t · Φ_t · GA_t] * SE_gate ===
+    raw_token = s_t * pe_t * phi_t * ga_t * se_gate
+    token = float(np.tanh(raw_token))  # Bound to [-1, 1]
+
+    # State classification
+    if token > 0.7:
+        state = 'insight'  # High consciousness, flow state
+    elif token > 0.4:
+        state = 'flow'  # Engaged, moderate awareness
+    elif token > 0:
+        state = 'nominal'  # Normal awareness
+    else:
+        state = 'noise'  # Low-Φ, gate out
+
+    return {
+        'token': token,
+        'components': {
+            's_t': float(s_t),
+            'pe_t': float(pe_t),
+            'pe_base': float(pe_base),
+            'pe_hier': float(hier_pe),
+            'phi_t': float(phi_t),
+            'ga_t': float(ga_t),
+            'plv': float(plv),
+            'gamma_sync': float(gamma_sync),
+            'se_gate': float(se_gate),
+            'se': float(se) if 'se' in locals() else 0
+        },
+        'state': state,
+        'timestamp_ms': word_start_ms
+    }
+
+
+def compute_token_for_word(eeg_data, word, s_t, session_prior, config, fs=256):
+    """
+    Compute token for a specific transcribed word
+
+    Args:
+        eeg_data: Full session EEG data (n_samples, n_channels)
+        word: Word dict with 'start_ms', 'end_ms', 'text'
+        s_t: Current somatic state
+        session_prior: Prior EEG distribution
+        config: Configuration dict
+        fs: Sample rate in Hz
+
+    Returns:
+        Token dict with word metadata
+    """
+    # Extract EEG window for word timing
+    start_sample = int((word['start_ms'] / 1000) * fs)
+    end_sample = int((word['end_ms'] / 1000) * fs)
+
+    if end_sample > len(eeg_data):
+        end_sample = len(eeg_data)
+    if start_sample >= end_sample:
+        return None
+
+    eeg_window = eeg_data[start_sample:end_sample]
+
+    if len(eeg_window) < 10:  # Minimum samples
+        return None
+
+    token_data = compute_symbiosis_token(
+        eeg_window, s_t, session_prior, config,
+        word_start_ms=word['start_ms']
+    )
+
+    # Add word metadata
+    token_data['word'] = word['text']
+    token_data['word_start_ms'] = word['start_ms']
+    token_data['word_end_ms'] = word['end_ms']
+    token_data['confidence'] = word.get('confidence', 1.0)
+
+    return token_data

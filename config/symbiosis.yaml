@@ -1,0 +1,15 @@
+transcriber:
+  model: "base"  # Or "small" for <300ms
+  language: "en"
+
+heart:
+  whoop_token: "${WHOOP_TOKEN}"
+  limitless_mac: "XX:XX:XX:XX:XX:XX"
+  poll_interval: 5  # secs
+
+equations:
+  se_threshold: -1.5  # Gate low-awareness
+  hier_levels: 3  # Sensory to abstract
+
+modes:
+  symbiosis: true  # Enables full fusion
