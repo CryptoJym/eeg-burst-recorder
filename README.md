@@ -292,6 +292,150 @@ plt.tight_layout()
 plt.show()
 ```
 
+## 🧠 MindMeld Pipeline (New!)
+
+**Real-time Audio-LSL Sync + Grok JSON Export + ML State Analysis**
+
+The MindMeld edition adds voice-brain correlation for meditation and conversation analysis with Grok AI integration.
+
+### What's New
+
+- 🎤 **Audio-LSL Sync**: Captures voice/audio aligned to EEG bursts via LSL timestamps
+- 📦 **Grok JSON Export**: Compressed `.json.snappy` files with EEG/audio/metrics/insights
+- 🤖 **ML State Analysis**: Automatic band power analysis and state classification (relax/alert/neutral)
+- 💬 **Continuous Mode**: Record fixed-duration chunks for conversations (not just bursts)
+- 🎯 **YAML Config**: Pre-configured settings for meditation vs conversation sessions
+
+### Installation
+
+Install additional MindMeld dependencies:
+
+```bash
+pip install pyaudio scipy pandas scikit-learn python-snappy pyyaml
+```
+
+### Quick Start
+
+#### Meditation Session (Burst Mode)
+
+```bash
+python scripts/run_mindmeld.py --session my_meditation --mode burst
+```
+
+#### Conversation Analysis (Continuous Mode)
+
+```bash
+python scripts/run_mindmeld.py --session grok_talk --mode continuous --duration 300
+```
+
+### Configuration
+
+Edit `config/meditation.yaml` for custom settings:
+
+```yaml
+thresholds:
+  rms: 25.0  # Lower threshold for calm states
+  p2p: 50.0
+
+audio:
+  enable: true
+  lsl_stream_name: "Audio"
+  sample_rate: 44100
+
+tags: ["grok_chat", "meditation"]
+```
+
+### Output Format
+
+MindMeld creates enhanced exports in `.json.snappy` format:
+
+```json
+{
+  "burst_id": "burst_20251111_162638_0001",
+  "eeg": {
+    "data": [[...], [...]],
+    "sample_rate": 500.0,
+    "channels": ["Ch1", "Ch2", ...],
+    "metrics": {"Ch1": {"rms": 85.2, "p2p": 279.7}, ...}
+  },
+  "audio": {
+    "data": [...],
+    "start_ts": 1699726598000,
+    "duration": 3.0,
+    "lsl_offset_ms": 8.4
+  },
+  "insights": {
+    "dominant_band": "theta",
+    "powers": {"delta": 51.26, "theta": 15.24, "alpha": 4.65, "beta": 10.05, "gamma": 14.72},
+    "anomaly_score": 0.15,
+    "state": "relax"
+  },
+  "tags": ["meditation", "theta-training"]
+}
+```
+
+### Analyzing with Grok
+
+1. **Decompress** a `.json.snappy` file:
+   ```bash
+   python -c "import snappy; print(snappy.uncompress(open('burst_data/session_001/burst_*.json.snappy','rb').read()).decode())"
+   ```
+
+2. **Copy** the JSON output
+
+3. **Paste to Grok** with a prompt like:
+   - "Analyze this EEG meditation session for theta/alpha patterns"
+   - "Compare my brain state during this conversation vs baseline"
+   - "What cognitive patterns emerge during these burst events?"
+
+### MindMeld vs Standard Mode
+
+| Feature | Standard Mode | MindMeld Mode |
+|---------|--------------|---------------|
+| **Trigger** | RMS/P2P thresholds | Threshold OR continuous chunks |
+| **Audio** | ❌ Not captured | ✅ LSL-synced audio |
+| **Export** | NPZ + JSON | NPZ + JSON + `.json.snappy` (Grok-ready) |
+| **Analysis** | Basic metrics | ML band power + state classification |
+| **Use Case** | Burst detection | Meditation + conversation analysis |
+
+### Tuning for Meditations
+
+For subtle theta/alpha detection during calm states:
+
+```yaml
+thresholds:
+  rms: 20.0  # Very sensitive
+  p2p: 40.0  # Catches alpha dips
+```
+
+**Channels to watch**: Frontal (F5, F6) for artifacts, Parietal (PO3, PO4) for meditation states
+
+### Continuous Mode (Conversations)
+
+For steady streaming during talks with Grok:
+
+```bash
+python scripts/run_mindmeld.py --session grok_convo --mode continuous --duration 600
+```
+
+- **Chunk size**: 30 seconds (configurable in code)
+- **Output**: Fixed-interval snapshots instead of threshold-triggered bursts
+- **Best for**: Conversations, lectures, extended focus sessions
+
+### Advanced: Direct CLI Use
+
+Bypass the launcher for full control:
+
+```bash
+python burst_recorder.py \
+  --config config/meditation.yaml \
+  --enable-audio \
+  --mode continuous \
+  --threshold-rms 25 \
+  --duration 120 \
+  --output-dir burst_data/custom_session
+```
+
 ## Advanced Usage
 
 ### Custom Event Detection

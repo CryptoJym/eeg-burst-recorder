@@ -2,16 +2,28 @@
 """
 Event-Triggered EEG Burst Recorder for Neurable MW75 Neuro
 Records EEG bursts when signal exceeds threshold, sends LSL markers
+
+MindMeld Edition: Adds audio sync, Grok JSON export, and ML state analysis
 """
 import numpy as np
 import pylsl
 import time
 import json
 import os
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
 import argparse
+
+# MindMeld imports
+try:
+    from src.audio_sync import AudioLSLSync
+    from src.grok_exporter import GrokExport
+except ImportError:
+    AudioLSLSync = None
+    GrokExport = None
+    print("Warning: MindMeld features not available (missing src modules)")
 
 
 class EEGBurstRecorder:
@@ -25,7 +37,10 @@ class EEGBurstRecorder:
         post_burst_seconds: float = 2.0,
         output_dir: str = "burst_data",
         send_markers: bool = True,
-        channel_names: Optional[List[str]] = None
+        channel_names: Optional[List[str]] = None,
+        config_file: Optional[str] = None,
+        enable_audio: bool = False,
+        mode: str = 'burst'
     ):
         """
         Initialize burst recorder
@@ -38,7 +53,19 @@ class EEGBurstRecorder:
             output_dir: Directory to save burst data
             send_markers: Whether to send LSL event markers
             channel_names: Names of EEG channels (auto-detected if None)
+            config_file: Path to YAML config (for MindMeld mode)
+            enable_audio: Enable audio-LSL sync
+            mode: 'burst' or 'continuous' recording mode
         """
+        # Load config if provided
+        self.config = {}
+        if config_file and Path(config_file).exists():
+            with open(config_file, 'r') as f:
+                self.config = yaml.safe_load(f)
+            # Override thresholds from config
+            threshold_rms = self.config.get('thresholds', {}).get('rms', threshold_rms)
+            threshold_p2p = self.config.get('thresholds', {}).get('p2p', threshold_p2p)
+
         self.threshold_rms = threshold_rms
         self.threshold_p2p = threshold_p2p
         self.pre_burst_seconds = pre_burst_seconds
@@ -46,9 +73,28 @@ class EEGBurstRecorder:
         self.output_dir = Path(output_dir)
         self.send_markers = send_markers
         self.channel_names = channel_names
+        self.mode = mode
+        self.chunk_duration = 30.0 if mode == 'continuous' else None
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # MindMeld: Audio sync
+        self.audio_sync = None
+        self.enable_audio = enable_audio and AudioLSLSync is not None
+        if self.enable_audio:
+            audio_config = self.config.get('audio', {'enable': True, 'sample_rate': 44100, 'lsl_stream_name': 'Audio'})
+            try:
+                self.audio_sync = AudioLSLSync(audio_config)
+                print("✓ MindMeld: Audio sync enabled")
+            except Exception as e:
+                print(f"Warning: Audio sync failed to initialize: {e}")
+                self.enable_audio = False
+
+        # MindMeld: Grok exporter
+        self.exporter = GrokExport() if GrokExport else None
+        if self.exporter:
+            print("✓ MindMeld: Grok exporter enabled")
 
         # LSL components
         self.inlet: Optional[pylsl.StreamInlet] = None
@@ -63,6 +109,7 @@ class EEGBurstRecorder:
         self.recording: bool = False
         self.last_burst_time: float = 0.0
         self.min_burst_interval: float = 3.0  # Minimum seconds between bursts
+        self.time_since_last_chunk: float = 0.0  # For continuous mode
 
     def connect_to_stream(self, stream_type: str = 'EEG', timeout: float = 10.0) -> bool:
         """
@@ -198,7 +245,7 @@ class EEGBurstRecorder:
 
     def save_burst(self, data: np.ndarray, burst_info: Dict):
         """
-        Save burst data to files
+        Save burst data to files (MindMeld enhanced)
 
         Args:
             data: Burst EEG data (samples x channels)
@@ -207,6 +254,18 @@ class EEGBurstRecorder:
         self.burst_count += 1
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         burst_id = f"burst_{timestamp}_{self.burst_count:04d}"
+
+        # MindMeld: Capture audio if enabled
+        audio_data = None
+        if self.enable_audio and self.audio_sync:
+            try:
+                trigger_ms = time.time() * 1000
+                audio_data = self.audio_sync.capture(
+                    trigger_ms - (self.pre_burst_seconds * 1000),
+                    self.pre_burst_seconds + self.post_burst_seconds
+                )
+            except Exception as e:
+                print(f"  Warning: Audio capture failed: {e}")
 
         # Save EEG data as NPZ
         data_file = self.output_dir / f"{burst_id}.npz"
@@ -238,6 +297,29 @@ class EEGBurstRecorder:
         with open(meta_file, 'w') as f:
             json.dump(meta, f, indent=2)
 
+        # MindMeld: Grok export with ML analysis
+        if self.exporter:
+            try:
+                insights = self.exporter.quick_analyze(data, self.sample_rate, self.n_channels)
+                payload = {
+                    'burst_id': burst_id,
+                    'eeg': {
+                        'data': data.tolist(),
+                        'sample_rate': self.sample_rate,
+                        'channels': self.channel_names,
+                        'metrics': burst_info.get('all_metrics', {})
+                    },
+                    'audio': audio_data,
+                    'timestamp': burst_info.get('timestamp'),
+                    'thresholds': {'rms': self.threshold_rms, 'p2p': self.threshold_p2p},
+                    'tags': self.config.get('tags', []),
+                    'insights': insights
+                }
+                grok_file = self.output_dir / f"{burst_id}.json.snappy"
+                self.exporter.dump(payload, str(grok_file))
+            except Exception as e:
+                print(f"  Warning: Grok export failed: {e}")
+
         print(f"✓ Burst #{self.burst_count} saved: {burst_id}")
         print(f"  Triggered channels: {', '.join([ch['channel'] for ch in burst_info['channels']])}")
 
@@ -245,6 +327,66 @@ class EEGBurstRecorder:
         self.send_marker(f"BURST_{burst_id}")
 
         return burst_id
+
+    def record_chunk(self, start_time: float):
+        """
+        Record a fixed-duration chunk (continuous mode)
+
+        Args:
+            start_time: Timestamp when chunk started
+        """
+        duration = self.chunk_duration
+        if not duration:
+            return
+
+        # Get chunk data from buffer
+        chunk_samples = int(self.sample_rate * duration)
+        if len(self.buffer) < chunk_samples:
+            return  # Not enough data yet
+
+        chunk_data = np.array(self.buffer[-chunk_samples:])
+
+        # Create chunk ID
+        self.burst_count += 1
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        chunk_id = f"chunk_{timestamp}_{self.burst_count:04d}"
+
+        # Calculate metrics
+        all_metrics = self.calculate_metrics(chunk_data)
+
+        # MindMeld: Capture audio
+        audio_data = None
+        if self.enable_audio and self.audio_sync:
+            try:
+                audio_data = self.audio_sync.capture(start_time * 1000, duration)
+            except Exception as e:
+                print(f"  Warning: Audio capture failed: {e}")
+
+        # MindMeld: Grok export with ML analysis
+        if self.exporter:
+            try:
+                insights = self.exporter.quick_analyze(chunk_data, self.sample_rate, self.n_channels)
+                payload = {
+                    'burst_id': chunk_id,
+                    'type': 'chunk',
+                    'eeg': {
+                        'data': chunk_data.tolist(),
+                        'sample_rate': self.sample_rate,
+                        'channels': self.channel_names,
+                        'metrics': all_metrics
+                    },
+                    'audio': audio_data,
+                    'timestamp': datetime.now().isoformat(),
+                    'duration': duration,
+                    'thresholds': {'rms': self.threshold_rms, 'p2p': self.threshold_p2p},
+                    'tags': self.config.get('tags', []) + ['talk_mode', 'continuous'],
+                    'insights': insights
+                }
+                grok_file = self.output_dir / f"{chunk_id}.json.snappy"
+                self.exporter.dump(payload, str(grok_file))
+                print(f"✓ Chunk #{self.burst_count} saved: {chunk_id} (state: {insights.get('state', 'unknown')})")
+            except Exception as e:
+                print(f"  Warning: Chunk export failed: {e}")
 
     def run(self, duration: Optional[float] = None):
         """
@@ -258,10 +400,16 @@ class EEGBurstRecorder:
             return
 
         print(f"\n{'='*60}")
-        print("EEG Burst Recorder Started")
+        print(f"EEG {'MindMeld ' if self.exporter else ''}Burst Recorder Started")
         print(f"{'='*60}")
-        print(f"Thresholds: RMS={self.threshold_rms}µV, P2P={self.threshold_p2p}µV")
-        print(f"Burst window: {self.pre_burst_seconds}s pre + {self.post_burst_seconds}s post")
+        print(f"Mode: {self.mode.upper()}")
+        if self.mode == 'burst':
+            print(f"Thresholds: RMS={self.threshold_rms}µV, P2P={self.threshold_p2p}µV")
+            print(f"Burst window: {self.pre_burst_seconds}s pre + {self.post_burst_seconds}s post")
+        else:
+            print(f"Chunk duration: {self.chunk_duration}s")
+        print(f"Audio sync: {'✓ Enabled' if self.enable_audio else '✗ Disabled'}")
+        print(f"Grok export: {'✓ Enabled' if self.exporter else '✗ Disabled'}")
         print(f"Output: {self.output_dir.absolute()}")
         print(f"Duration: {'∞ (press Ctrl+C to stop)' if duration is None else f'{duration}s'}")
         print(f"{'='*60}\n")
@@ -294,30 +442,39 @@ class EEGBurstRecorder:
                 if len(self.buffer) < min_samples:
                     continue
 
-                # Get recent data for burst detection
-                detection_window = int(self.sample_rate * 0.5)  # Last 500ms
-                recent_data = np.array(self.buffer[-detection_window:])
+                # Mode-specific handling
+                if self.mode == 'burst':
+                    # Get recent data for burst detection
+                    detection_window = int(self.sample_rate * 0.5)  # Last 500ms
+                    recent_data = np.array(self.buffer[-detection_window:])
 
-                # Detect burst
-                burst_info = self.detect_burst(recent_data)
-                if burst_info:
-                    # Get full burst window
-                    pre_samples = int(self.sample_rate * self.pre_burst_seconds)
-                    post_samples = int(self.sample_rate * self.post_burst_seconds)
+                    # Detect burst
+                    burst_info = self.detect_burst(recent_data)
+                    if burst_info:
+                        # Get full burst window
+                        pre_samples = int(self.sample_rate * self.pre_burst_seconds)
+                        post_samples = int(self.sample_rate * self.post_burst_seconds)
 
-                    # Wait for post-burst data
-                    print(f"\n🔥 BURST DETECTED! Capturing {self.post_burst_seconds}s post-burst...")
-                    for _ in range(post_samples):
-                        sample, _ = self.inlet.pull_sample(timeout=1.0)
-                        if sample:
-                            self.buffer.append(np.array(sample))
+                        # Wait for post-burst data
+                        print(f"\n🔥 BURST DETECTED! Capturing {self.post_burst_seconds}s post-burst...")
+                        for _ in range(post_samples):
+                            sample, _ = self.inlet.pull_sample(timeout=1.0)
+                            if sample:
+                                self.buffer.append(np.array(sample))
 
-                    # Extract burst window
-                    burst_data = np.array(self.buffer[-(pre_samples + post_samples):])
+                        # Extract burst window
+                        burst_data = np.array(self.buffer[-(pre_samples + post_samples):])
 
-                    # Save burst
-                    self.save_burst(burst_data, burst_info)
-                    self.last_burst_time = time.time()
+                        # Save burst
+                        self.save_burst(burst_data, burst_info)
+                        self.last_burst_time = time.time()
+
+                elif self.mode == 'continuous':
+                    # Check if it's time for a new chunk
+                    elapsed = time.time() - start_time
+                    if elapsed - self.time_since_last_chunk >= self.chunk_duration:
+                        self.record_chunk(start_time + self.time_since_last_chunk)
+                        self.time_since_last_chunk = elapsed
 
                 # Progress indicator
                 if samples_processed % int(self.sample_rate) == 0:
@@ -391,6 +548,25 @@ def main():
         default='EEG',
         help='LSL stream type to connect to (default: EEG)'
     )
+    # MindMeld arguments
+    parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='Path to YAML config file (e.g., config/meditation.yaml)'
+    )
+    parser.add_argument(
+        '--enable-audio',
+        action='store_true',
+        help='Enable audio-LSL synchronization for MindMeld'
+    )
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['burst', 'continuous'],
+        default='burst',
+        help='Recording mode: burst (threshold-triggered) or continuous (fixed chunks)'
+    )
 
     args = parser.parse_args()
 
@@ -401,7 +577,10 @@ def main():
         pre_burst_seconds=args.pre_burst,
         post_burst_seconds=args.post_burst,
         output_dir=args.output_dir,
-        send_markers=not args.no_markers
+        send_markers=not args.no_markers,
+        config_file=args.config,
+        enable_audio=args.enable_audio,
+        mode=args.mode
     )
 
     # Connect to stream

@@ -1,0 +1,10 @@
+thresholds:
+  rms: 25.0  # µV for calm meditations
+  p2p: 50.0
+
+audio:
+  enable: true
+  lsl_stream_name: "Audio"  # Create via separate PyAudio-to-LSL outlet if needed
+  sample_rate: 44100
+
+tags: ["grok_chat", "meditation"]
