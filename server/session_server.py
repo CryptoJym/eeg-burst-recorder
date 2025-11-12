@@ -76,6 +76,12 @@ class SessionServer:
         self.app.router.add_get('/api/sessions', self.list_sessions)
         self.app.router.add_get('/api/status', self.get_status)
         self.app.router.add_get('/health', self.health_check)
+        self.app.router.add_get('/api/sessions/{session_id}/grok', self.export_for_grok)
+        self.app.router.add_get('/api/sessions-list', self.list_sessions_with_bursts)
+
+        # Serve static UI files
+        ui_dir = Path(__file__).parent.parent / 'ui'
+        self.app.router.add_static('/ui', ui_dir)
 
     def setup_cors(self):
         """Enable CORS for local development"""
@@ -236,27 +242,27 @@ class SessionServer:
 
         logger.info(f"Stopping session: {self.current_session['id']}")
 
-        # Stop monitoring tasks
+        # Stop monitoring tasks (gracefully handle any errors)
         if self.burst_monitor_task:
             self.burst_monitor_task.cancel()
             try:
                 await self.burst_monitor_task
-            except asyncio.CancelledError:
-                pass
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning(f"Burst monitor cleanup: {e}")
 
         if self.spectral_monitor_task:
             self.spectral_monitor_task.cancel()
             try:
                 await self.spectral_monitor_task
-            except asyncio.CancelledError:
-                pass
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning(f"Spectral monitor cleanup: {e}")
 
         if self.audio_monitor_task:
             self.audio_monitor_task.cancel()
             try:
                 await self.audio_monitor_task
-            except asyncio.CancelledError:
-                pass
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning(f"Audio monitor cleanup: {e}")
 
         # Finalize session
         session_data = self.current_session.copy()
@@ -349,7 +355,8 @@ class SessionServer:
             str(burst_script),
             "--threshold-rms", str(self.current_session['thresholds']['rms']),
             "--threshold-p2p", str(self.current_session['thresholds']['p2p']),
-            "--output-dir", str(self.data_dir / self.current_session['id'])
+            "--output-dir", str(self.data_dir / self.current_session['id']),
+            "--enable-audio"  # Always enable audio for MindMeld
         ]
 
         # Add duration if specified
@@ -452,11 +459,21 @@ class SessionServer:
                 artifact_timestamps=self.burst_timestamps
             )
 
-            # Connect to LSL stream
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                self.spectral_analyzer.connect_stream
-            )
+            # Connect to LSL stream (gracefully handle missing hardware)
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self.spectral_analyzer.connect_stream
+                )
+            except RuntimeError as e:
+                logger.warning(f"No EEG stream available - spectral analysis disabled: {e}")
+                # Notify clients that spectral is unavailable
+                await self.broadcast({
+                    'type': 'spectral_unavailable',
+                    'reason': 'No EEG hardware connected',
+                    'message': 'Connect MW75 headphones and start Neurable Research Kit'
+                })
+                return
 
             # Setup output file
             await asyncio.get_event_loop().run_in_executor(
@@ -613,6 +630,91 @@ class SessionServer:
             json.dump(session_data, f, indent=2)
 
         logger.info(f"Session saved to {session_file}")
+
+    async def list_sessions_with_bursts(self, request):
+        """List all sessions with burst counts"""
+        try:
+            sessions = []
+
+            if self.data_dir.exists():
+                for session_dir in sorted(self.data_dir.iterdir(), reverse=True):
+                    if session_dir.is_dir():
+                        # Count bursts
+                        burst_files = list(session_dir.glob('burst_*.json.snappy'))
+
+                        # Get session metadata if available
+                        session_file = session_dir / 'session.json'
+                        session_data = {}
+                        if session_file.exists():
+                            with open(session_file, 'r') as f:
+                                session_data = json.load(f)
+
+                        sessions.append({
+                            'id': session_dir.name,
+                            'burst_count': len(burst_files),
+                            'name': session_data.get('name', session_dir.name),
+                            'started_at': session_data.get('started_at'),
+                            'duration_seconds': session_data.get('duration_seconds')
+                        })
+
+            return web.json_response({'sessions': sessions})
+
+        except Exception as e:
+            logger.error(f"Error listing sessions: {e}")
+            return web.json_response({'error': str(e)}, status=500)
+
+    async def export_for_grok(self, request):
+        """Export session bursts in Grok-ready JSON format"""
+        session_id = request.match_info['session_id']
+        session_dir = self.data_dir / session_id
+
+        if not session_dir.exists():
+            return web.json_response(
+                {'error': f'Session not found: {session_id}'},
+                status=404
+            )
+
+        try:
+            import snappy
+
+            bursts = []
+            burst_files = sorted(session_dir.glob('burst_*.json.snappy'))
+
+            if not burst_files:
+                return web.json_response(
+                    {'error': 'No bursts found in session'},
+                    status=404
+                )
+
+            for burst_file in burst_files:
+                try:
+                    with open(burst_file, 'rb') as f:
+                        compressed = f.read()
+                    decompressed = snappy.uncompress(compressed)
+                    burst_data = json.loads(decompressed.decode('utf-8'))
+                    bursts.append(burst_data)
+                except Exception as e:
+                    logger.warning(f"Could not read burst {burst_file.name}: {e}")
+
+            # Create Grok-ready export
+            grok_export = {
+                'session_name': session_id,
+                'total_bursts': len(bursts),
+                'first_burst_time': bursts[0].get('timestamp') if bursts else None,
+                'last_burst_time': bursts[-1].get('timestamp') if bursts else None,
+                'bursts': bursts
+            }
+
+            return web.json_response(grok_export)
+
+        except ImportError:
+            return web.json_response(
+                {'error': 'snappy module not installed'},
+                status=500
+            )
+        except Exception as e:
+            logger.error(f"Error exporting for Grok: {e}")
+            return web.json_response({'error': str(e)}, status=500)
 
     async def start(self):
         """Start the server"""
