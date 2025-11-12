@@ -1,15 +1,18 @@
 """
-Grok JSON Exporter
+Grok JSON Exporter with Symbiosis Timeline Fusion
 
 Compresses EEG/audio/metrics into snappy-compressed JSON for Grok analysis.
+Symbiosis v1.2: Adds timeline array with word-level tokens and EEG/heart correlates.
+
 Decompress with: python -c "import snappy; print(snappy.uncompress(open('file.json.snappy','rb').read()).decode())"
 """
 
 import json
 import time
+import numpy as np
 import snappy
 from pathlib import Path
-from .analyzer import quick_analyze
+from .analyzer import quick_analyze, compute_token_for_word
 
 
 class GrokExport:
@@ -105,3 +108,69 @@ class GrokExport:
 
         print(f"\n✓ Combined {len(bursts)} bursts into {output_path}")
         print(f"  Paste decompressed JSON to Grok for analysis!")
+
+    def dump_symbiosis_timeline(self, bursts, transcripts, heart_logs, session_id, eeg_data, config, path):
+        """
+        Create symbiosis timeline with word-level tokens fused to EEG/heart
+
+        Args:
+            bursts: List of burst dicts with EEG data
+            transcripts: List of word dicts with timestamps
+            heart_logs: List of heart state dicts with timestamps
+            session_id: Session identifier
+            eeg_data: Full session EEG array for windowing
+            config: Configuration dict
+            path: Output path for compressed JSON
+
+        Returns:
+            Timeline payload dict
+        """
+        timeline = []
+        session_prior = eeg_data[:1000] if len(eeg_data) > 1000 else eeg_data  # First 1s as baseline
+
+        # Match words to nearest heart states and compute tokens
+        for word in transcripts:
+            # Find nearest heart state (within 500ms)
+            nearest_heart = None
+            min_diff = float('inf')
+
+            for h_log in heart_logs:
+                diff = abs(h_log['timestamp_ms'] - word['start_ms'])
+                if diff < min_diff and diff < 500:
+                    min_diff = diff
+                    nearest_heart = h_log
+
+            s_t = nearest_heart['s_t'] if nearest_heart else 0.5
+
+            # Compute token for this word
+            token_data = compute_token_for_word(
+                eeg_data, word, s_t, session_prior, config
+            )
+
+            if token_data:
+                timeline.append(token_data)
+
+        # Calculate predictions
+        tokens = [t['token'] for t in timeline]
+        avg_token = float(np.mean(tokens)) if tokens else 0.0
+        flow_ratio = sum(1 for t in tokens if t > 0.4) / len(tokens) if tokens else 0.0
+
+        payload = {
+            'session': session_id,
+            'timeline': timeline,
+            'predictions': {
+                'avg_token': avg_token,
+                'flow_ratio': flow_ratio,
+                'insight_count': sum(1 for t in tokens if t > 0.7),
+                'word_count': len(timeline)
+            },
+            'metadata': {
+                'duration_sec': eeg_data.shape[0] / 256 if len(eeg_data) > 0 else 0,
+                'burst_count': len(bursts),
+                'transcript_words': len(transcripts),
+                'heart_samples': len(heart_logs)
+            }
+        }
+
+        self.dump(payload, path)
+        return payload
