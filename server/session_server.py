@@ -19,10 +19,11 @@ from queue import Queue
 from aiohttp import web
 import aiohttp_cors
 
-# Import our spectral analyzer
+# Import our spectral analyzer and audio monitor
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from spectral_analyzer import SpectralAnalyzer
+from audio_monitor import AudioMonitor
 
 # Setup logging
 logging.basicConfig(
@@ -51,11 +52,14 @@ class SessionServer:
         # Background tasks
         self.burst_monitor_task: Optional[asyncio.Task] = None
         self.spectral_monitor_task: Optional[asyncio.Task] = None
+        self.audio_monitor_task: Optional[asyncio.Task] = None
 
         # Real-time data processors
         self.burst_subprocess: Optional[subprocess.Popen] = None
         self.spectral_analyzer: Optional[SpectralAnalyzer] = None
         self.spectral_queue: Queue = Queue()
+        self.audio_monitor: Optional[AudioMonitor] = None
+        self.audio_queue: Queue = Queue()
         self.burst_timestamps: List[float] = []  # For artifact-aware spectral
 
         # App
@@ -206,6 +210,11 @@ class SessionServer:
                 self.monitor_spectral_analyzer()
             )
 
+        # Start audio monitoring if available
+        self.audio_monitor_task = asyncio.create_task(
+            self.monitor_audio_stream()
+        )
+
         # Notify clients
         await self.broadcast({
             'type': 'session_started',
@@ -239,6 +248,13 @@ class SessionServer:
             self.spectral_monitor_task.cancel()
             try:
                 await self.spectral_monitor_task
+            except asyncio.CancelledError:
+                pass
+
+        if self.audio_monitor_task:
+            self.audio_monitor_task.cancel()
+            try:
+                await self.audio_monitor_task
             except asyncio.CancelledError:
                 pass
 
@@ -505,6 +521,87 @@ class SessionServer:
         except Exception as e:
             logger.error(f"Spectral monitor error: {e}")
             raise
+
+    async def monitor_audio_stream(self):
+        """Monitor audio LSL stream and broadcast waveform data"""
+        logger.info("Starting audio monitor")
+
+        try:
+            # Create audio monitor instance
+            self.audio_monitor = AudioMonitor(
+                window_seconds=1.0,
+                update_interval=0.1  # 10Hz updates
+            )
+
+            # Try to connect to audio stream (non-blocking, may fail if no audio)
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.audio_monitor.connect_stream(timeout=2.0)
+            )
+
+            if not self.audio_monitor.inlet:
+                logger.warning("No audio stream available - continuing without audio")
+                return
+
+            logger.info("Audio monitor connected to stream")
+
+            # Callback for audio updates
+            def audio_callback(result):
+                # Put result in queue for async processing
+                self.audio_queue.put(result)
+
+            # Start audio monitoring in background thread
+            audio_thread = threading.Thread(
+                target=self.audio_monitor.run,
+                kwargs={
+                    'duration': self.current_session.get('duration'),
+                    'callback': audio_callback
+                },
+                daemon=True
+            )
+            audio_thread.start()
+
+            # Process audio updates from queue
+            while True:
+                # Check queue for new audio data
+                try:
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.audio_queue.get(timeout=0.1)
+                    )
+
+                    audio_event = {
+                        'type': 'audio_update',
+                        'timestamp': result['timestamp'],
+                        'time_seconds': result['time_seconds'],
+                        'waveform': result['waveform'],
+                        'sample_rate': result['sample_rate'],
+                        'rms': result['rms'],
+                        'peak': result['peak']
+                    }
+
+                    # Broadcast to clients
+                    await self.broadcast(audio_event)
+
+                except Exception as e:
+                    # No data in queue, keep waiting
+                    await asyncio.sleep(0.1)
+
+                # Check if thread is still alive
+                if not audio_thread.is_alive():
+                    logger.info("Audio monitor thread ended")
+                    break
+
+        except asyncio.CancelledError:
+            logger.info("Audio monitor stopped")
+            if self.audio_monitor:
+                self.audio_monitor.close()
+            raise
+
+        except Exception as e:
+            logger.error(f"Audio monitor error: {e}")
+            # Don't raise - audio is optional
+            return
 
     async def save_session(self, session_data: dict):
         """Save session metadata to file"""
