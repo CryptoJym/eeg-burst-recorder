@@ -139,7 +139,7 @@ class HeartSyncer:
         Compute somatic state S_t from heart signals
 
         Equation: S_t = σ(∑ w_i φ_i) where σ is sigmoid
-        - w_hrv = 0.6 (valence weight)
+        - w_hrv = 0.6 (valence weight, inverted)
         - w_gsr = 0.4 (arousal weight)
         - Threshold tuned for DEAP dataset (r=0.72)
 
@@ -153,8 +153,13 @@ class HeartSyncer:
         hrv = whoop_hrv if whoop_hrv is not None else self.last_hrv
         gsr_val = gsr if gsr is not None else self.last_gsr
 
+        # Invert HRV for arousal calculation
+        # High HRV (parasympathetic/relaxation) → low arousal
+        # Low HRV (sympathetic/stress) → high arousal
+        s_t_hrv = 1.0 / (hrv + 1.0)
+
         # Weighted sum (empirical weights from arousal/valence models)
-        arousal = 0.6 * hrv + 0.4 * gsr_val
+        arousal = 0.6 * s_t_hrv + 0.4 * gsr_val
 
         # Sigmoid with tuned threshold (centers at 0.5 -> S_t=0.5)
         self.last_s_t = expit(arousal * 10 - 5)
